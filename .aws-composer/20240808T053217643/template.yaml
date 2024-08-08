@@ -1,0 +1,482 @@
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  HomeUI:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: HomeUI
+      CodeUri: src/UI/Home
+      Handler: index.handler
+      Runtime: nodejs20.x
+      MemorySize: 3008
+      Timeout: 30
+      Tracing: Active
+      Layers:
+        - !Ref HomeUIDependencies
+      Environment:
+        Variables:
+          LOGINUI_FUNCTION_NAME: !Ref LoginUI
+          LOGINUI_FUNCTION_ARN: !GetAtt LoginUI.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref LoginUI
+      Events:
+        APIGET:
+          Type: Api
+          Properties:
+            Path: /
+            Method: GET
+            RestApiId: !Ref API
+  HomeUILogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${HomeUI}
+  HomeUIDependencies:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Layer ${ResourceName}
+        - ResourceName: HomeUIDependencies
+      ContentUri: src/Layer/HomeUIDependencies
+      RetentionPolicy: Retain
+    Metadata:
+      BuildMethod: nodejs20.x
+  LoginUIDependencies:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Layer ${ResourceName}
+        - ResourceName: LoginUIDependencies
+      ContentUri: src/Layer/LoginUIDependencies
+      RetentionPolicy: Retain
+  LoginUI:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: LoginUI
+      CodeUri: src/UI/Login
+      Handler: index.handler
+      Runtime: nodejs20.x
+      MemorySize: 3008
+      Timeout: 30
+      Tracing: Active
+      Layers:
+        - !Ref LoginUIDependencies
+      Environment:
+        Variables:
+          LOGINUICLIENT_USER_POOL_CLIENT_ID: !Ref LoginUIClient
+  LoginUILogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${LoginUI}
+  LoginUIClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      AliasAttributes:
+        - email
+        - preferred_username
+      UserPoolName: !Sub ${AWS::StackName}-UserPool
+      AutoVerifiedAttributes:
+        - email
+  UploadUIDependencies:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Layer ${ResourceName}
+        - ResourceName: UploadUIDependencies
+      ContentUri: src/Layer/UploadUIDependencies
+      RetentionPolicy: Retain
+  UploadUI:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: UploadUI
+      CodeUri: src/UI/Upload
+      Handler: index.handler
+      Runtime: nodejs20.x
+      MemorySize: 3008
+      Timeout: 30
+      Tracing: Active
+      Layers:
+        - !Ref UploadUIDependencies
+      Environment:
+        Variables:
+          UPLOADBUCKET_BUCKET_NAME: !Ref UploadBucket
+          UPLOADBUCKET_BUCKET_ARN: !GetAtt UploadBucket.Arn
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:GetObjectAcl
+                - s3:GetObjectLegalHold
+                - s3:GetObjectRetention
+                - s3:GetObjectTorrent
+                - s3:GetObjectVersion
+                - s3:GetObjectVersionAcl
+                - s3:GetObjectVersionForReplication
+                - s3:GetObjectVersionTorrent
+                - s3:ListBucket
+                - s3:ListBucketMultipartUploads
+                - s3:ListBucketVersions
+                - s3:ListMultipartUploadParts
+                - s3:AbortMultipartUpload
+                - s3:DeleteObject
+                - s3:DeleteObjectVersion
+                - s3:PutObject
+                - s3:PutObjectLegalHold
+                - s3:PutObjectRetention
+                - s3:RestoreObject
+              Resource:
+                - !Sub arn:${AWS::Partition}:s3:::${UploadBucket}
+                - !Sub arn:${AWS::Partition}:s3:::${UploadBucket}/*
+  UploadUILogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${UploadUI}
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-uploadbuc-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: alias/aws/s3
+      PublicAccessBlockConfiguration:
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  UploadBucketBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UploadBucket
+      PolicyDocument:
+        Id: RequireEncryptionInTransit
+        Version: '2012-10-17'
+        Statement:
+          - Principal: '*'
+            Action: '*'
+            Effect: Deny
+            Resource:
+              - !GetAtt UploadBucket.Arn
+              - !Sub ${UploadBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+  API:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub
+        - ${ResourceName} From Stack ${AWS::StackName}
+        - ResourceName: API
+      StageName: Prod
+      DefinitionBody:
+        openapi: '3.0'
+        info: {}
+        paths:
+          /login:
+            get:
+              responses:
+                '200':
+                  description: default OK response
+              x-amazon-apigateway-integration:
+                credentials: !GetAtt APITologinUserAuthenticationRedirectRole.Arn
+                httpMethod: POST
+                type: aws
+                uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:states:action/StartExecution
+                responses:
+                  default:
+                    statusCode: 200
+                requestTemplates:
+                  application/json: !Sub |-
+                    {
+                      "input": "$util.escapeJavaScript($input.json('$'))",
+                      "name": "$context.requestId",
+                      "stateMachineArn": "${loginUserAuthenticationRedirect}"
+                    }
+          /:
+            get:
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HomeUI.Arn}/invocations
+              responses: {}
+          /upload:
+            get:
+              responses:
+                '200':
+                  description: default OK response
+              x-amazon-apigateway-integration:
+                credentials: !GetAtt APITouploadUserAuthenticationRedirectRole.Arn
+                httpMethod: POST
+                type: aws
+                uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:states:action/StartExecution
+                responses:
+                  default:
+                    statusCode: 200
+                requestTemplates:
+                  application/json: !Sub |-
+                    {
+                      "input": "$util.escapeJavaScript($input.json('$'))",
+                      "name": "$context.requestId",
+                      "stateMachineArn": "${uploadUserAuthenticationRedirect}"
+                    }
+          /user/isUserAuthenticated:
+            get:
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${isUserAuthenticated.Arn}/invocations
+              responses: {}
+      EndpointConfiguration: REGIONAL
+      TracingEnabled: true
+      Cors:
+        MaxAge: 5
+  isUserAuthenticated:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: isUserAuthenticated
+      CodeUri: src/isUserAuthenticated
+      Handler: index.handler
+      Runtime: nodejs20.x
+      MemorySize: 3008
+      Timeout: 30
+      Tracing: Active
+      Events:
+        APIGETuserisUserAuthenticated:
+          Type: Api
+          Properties:
+            Path: /user/isUserAuthenticated
+            Method: GET
+            RestApiId: !Ref API
+  isUserAuthenticatedLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${isUserAuthenticated}
+  uploadUserAuthenticationRedirect:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Definition:
+        StartAt: Choice
+        States:
+          Choice:
+            Type: Choice
+            Choices:
+              - Variable: $.stateInput.key
+                BooleanEquals: true
+                Next: UploadUI
+            Default: LoginUI
+          UploadUI:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            OutputPath: $.Payload
+            Parameters:
+              Payload.$: $
+              FunctionName: ${UploadUI}
+            Retry:
+              - ErrorEquals:
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.SdkClientException
+                  - Lambda.TooManyRequestsException
+                IntervalSeconds: 1
+                MaxAttempts: 3
+                BackoffRate: 2
+            End: true
+          LoginUI:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              Payload.$: $
+              FunctionName: ${LoginUI}
+            End: true
+      Logging:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt uploadUserAuthenticationRedirectLogGroup.Arn
+      Policies:
+        - AWSXrayWriteOnlyAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: '*'
+        - LambdaInvokePolicy:
+            FunctionName: !Ref UploadUI
+        - LambdaInvokePolicy:
+            FunctionName: !Ref LoginUI
+        - LambdaInvokePolicy:
+            FunctionName: !Ref LoginUI
+      Tracing:
+        Enabled: true
+      Type: STANDARD
+      DefinitionSubstitutions:
+        UploadUI: !GetAtt UploadUI.Arn
+        LoginUI: !GetAtt LoginUI.Arn
+      Events:
+        APIGETupload:
+          Type: Api
+          Properties:
+            Path: /upload
+            Method: GET
+            RestApiId: !Ref API
+  uploadUserAuthenticationRedirectLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub
+        - /aws/vendedlogs/states/${AWS::StackName}-${ResourceId}-Logs
+        - ResourceId: uploadUserAuthenticationRedirect
+  APITouploadUserAuthenticationRedirectRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: !Sub apigateway.${AWS::URLSuffix}
+      Policies:
+        - PolicyName: ExecuteStateMachine
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !GetAtt uploadUserAuthenticationRedirect.Arn
+  loginUserAuthenticationRedirect:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Definition:
+        StartAt: Choice
+        States:
+          Choice:
+            Type: Choice
+            Choices:
+              - Variable: $.stateInput.key
+                BooleanEquals: true
+                Next: HomeUI
+            Default: LoginUI
+          HomeUI:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            OutputPath: $.Payload
+            Parameters:
+              Payload.$: $
+              FunctionName: ${HomeUI}
+            Retry:
+              - ErrorEquals:
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.SdkClientException
+                  - Lambda.TooManyRequestsException
+                IntervalSeconds: 1
+                MaxAttempts: 3
+                BackoffRate: 2
+            End: true
+          LoginUI:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              Payload.$: $
+              FunctionName: ${LoginUI}
+            End: true
+      Logging:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt loginUserAuthenticationRedirectLogGroup.Arn
+      Policies:
+        - AWSXrayWriteOnlyAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: '*'
+        - LambdaInvokePolicy:
+            FunctionName: !Ref HomeUI
+        - LambdaInvokePolicy:
+            FunctionName: !Ref LoginUI
+      Tracing:
+        Enabled: true
+      Type: STANDARD
+      DefinitionSubstitutions:
+        HomeUI: !GetAtt HomeUI.Arn
+        LoginUI: !GetAtt LoginUI.Arn
+      Events:
+        APIGETlogin:
+          Type: Api
+          Properties:
+            Path: /login
+            Method: GET
+            RestApiId: !Ref API
+  loginUserAuthenticationRedirectLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub
+        - /aws/vendedlogs/states/${AWS::StackName}-${ResourceId}-Logs
+        - ResourceId: loginUserAuthenticationRedirect
+  APITologinUserAuthenticationRedirectRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: !Sub apigateway.${AWS::URLSuffix}
+      Policies:
+        - PolicyName: ExecuteStateMachine
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !GetAtt loginUserAuthenticationRedirect.Arn
+Metadata:
+  AWS::Composer::Groups:
+    Group:
+      Label: UI
+      Members:
+        - HomeUI
+        - LoginUI
+        - UploadUI
+    Group2:
+      Label: UIDependencies
+      Members:
+        - HomeUIDependencies
+        - UploadUIDependencies
+        - LoginUIDependencies

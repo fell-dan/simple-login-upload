@@ -1,0 +1,241 @@
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  HomeUI:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: HomeUI
+      CodeUri: src/Function
+      Handler: index.handler
+      Runtime: nodejs20.x
+      MemorySize: 3008
+      Timeout: 30
+      Tracing: Active
+      Layers:
+        - !Ref HomeUIDependencies
+      Environment:
+        Variables:
+          LOGINUI_FUNCTION_NAME: !Ref LoginUI
+          LOGINUI_FUNCTION_ARN: !GetAtt LoginUI.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref LoginUI
+      Events:
+        APIGET:
+          Type: Api
+          Properties:
+            Path: /
+            Method: GET
+            RestApiId: !Ref API
+  HomeUILogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${HomeUI}
+  HomeUIDependencies:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Layer ${ResourceName}
+        - ResourceName: HomeUIDependencies
+      ContentUri: src/Layer
+      RetentionPolicy: Retain
+    Metadata:
+      BuildMethod: nodejs20.x
+  LoginUIDependencies:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Layer ${ResourceName}
+        - ResourceName: LoginUIDependencies
+      ContentUri: src/Layer
+      RetentionPolicy: Retain
+  LoginUI:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: LoginUI
+      CodeUri: src/Function2
+      Handler: index.handler
+      Runtime: nodejs20.x
+      MemorySize: 3008
+      Timeout: 30
+      Tracing: Active
+      Layers:
+        - !Ref LoginUIDependencies
+      Environment:
+        Variables:
+          LOGINUICLIENT_USER_POOL_CLIENT_ID: !Ref LoginUIClient
+  LoginUILogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${LoginUI}
+  LoginUIClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      AliasAttributes:
+        - email
+        - preferred_username
+      UserPoolName: !Sub ${AWS::StackName}-UserPool
+      AutoVerifiedAttributes:
+        - email
+  UploadUIDependencies:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Layer ${ResourceName}
+        - ResourceName: UploadUIDependencies
+      ContentUri: src/Layer
+      RetentionPolicy: Retain
+  UploadUI:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: UploadUI
+      CodeUri: src/Function2
+      Handler: index.handler
+      Runtime: nodejs20.x
+      MemorySize: 3008
+      Timeout: 30
+      Tracing: Active
+      Layers:
+        - !Ref UploadUIDependencies
+  UploadUILogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${UploadUI}
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-uploadbuc-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: alias/aws/s3
+      PublicAccessBlockConfiguration:
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  UploadBucketBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UploadBucket
+      PolicyDocument:
+        Id: RequireEncryptionInTransit
+        Version: '2012-10-17'
+        Statement:
+          - Principal: '*'
+            Action: '*'
+            Effect: Deny
+            Resource:
+              - !GetAtt UploadBucket.Arn
+              - !Sub ${UploadBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+  API:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub
+        - ${ResourceName} From Stack ${AWS::StackName}
+        - ResourceName: API
+      StageName: Prod
+      DefinitionBody:
+        openapi: '3.0'
+        info: {}
+        paths:
+          /login:
+            get:
+              responses: {}
+          /:
+            get:
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HomeUI.Arn}/invocations
+              responses: {}
+      EndpointConfiguration: REGIONAL
+      TracingEnabled: true
+      Cors:
+        MaxAge: 5
+  StateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Definition:
+        StartAt: isLoggedIn
+        States:
+          isLoggedIn:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              Payload.$: $
+              FunctionName: ${LambdaFunction1}
+            ResultSelector:
+              statusCode.$: $.Payload.statusCode
+              body.$: $.Payload.body
+            Next: Choice
+          Choice:
+            Type: Choice
+            Choices:
+              - Variable: $.body
+                BooleanEquals: true
+                End: true
+              - Variable: $.body
+                BooleanEquals: false
+                End: true
+      Logging:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+      Policies:
+        - AWSXrayWriteOnlyAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: '*'
+      Tracing:
+        Enabled: true
+      Type: STANDARD
+      DefinitionSubstitutions:
+        LambdaFunction1: !Ref AWS::NoValue
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub
+        - /aws/vendedlogs/states/${AWS::StackName}-${ResourceId}-Logs
+        - ResourceId: StateMachine
+Metadata:
+  AWS::Composer::Groups:
+    Group:
+      Label: UI
+      Members:
+        - HomeUI
+        - UploadUI
+        - LoginUI
+    Group2:
+      Label: UIDependencies
+      Members:
+        - HomeUIDependencies
+        - UploadUIDependencies
+        - LoginUIDependencies
